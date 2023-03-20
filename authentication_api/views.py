@@ -10,8 +10,10 @@ from rest_framework.status import (
     HTTP_201_CREATED,
     HTTP_400_BAD_REQUEST,
     HTTP_401_UNAUTHORIZED,
-    HTTP_200_OK,)
-from django.contrib.auth import get_user_model
+    HTTP_200_OK,
+    HTTP_404_NOT_FOUND,
+)
+from django.contrib.auth.models import User
 from django.contrib.auth.hashers import make_password
 from django.core.mail import EmailMessage
 from django.db import IntegrityError
@@ -20,21 +22,11 @@ from rest_framework.permissions import AllowAny
 from django.utils.crypto import get_random_string
 
 
-# Helper function to retrieve user object by email
-def get_user_by_email(self, email):
-    UserModel = get_user_model()
-    try:
-        return UserModel.objects.get(email=email)
-    except UserModel.DoesNotExist:
-        raise NotFound({'status': False,
-                        'message': f'This User {email} is not exist',
-                        'data': None})
-
-
 class RegistrationAPIView(APIView):
     """
     API View to register a new user.
     """
+
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -53,19 +45,17 @@ class RegistrationAPIView(APIView):
         serializer = UserSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save()
-            content = {
-                'status': True,
-                'message': 'User created successfully',
-                'data': None
-                }
-            return Response(content, status=HTTP_201_CREATED)
+            return Response({
+                "status": True,
+                "message": "User created successfully",
+                "data": None,
+            }, status=HTTP_201_CREATED)
         else:
-            content = {
-                    'status': False,
-                    'errors': serializer.errors,
-                    'data': None
-                    }
-            return Response(content, status=HTTP_400_BAD_REQUEST)
+            return Response({
+                "status": False,
+                "errors": serializer.errors,
+                "data": None
+            }, status=HTTP_400_BAD_REQUEST)
 
 
 class EmailLoginAPIView(APIView):
@@ -76,7 +66,7 @@ class EmailLoginAPIView(APIView):
     def post(self, request):
         """
         Authenticate a user and generate a new authentication token by
-        accepting user email and password
+        accepting user email and password.
 
         Parameters:
         request (Request): The incoming request object
@@ -86,13 +76,20 @@ class EmailLoginAPIView(APIView):
             if successful.
             Error response if email or password is missing or invalid.
         """
-        email = request.data.get('email')
-        password = request.data.get('password')
+        email = request.data.get("email")
+        password = request.data.get("password")
         if email and password:
-            user = get_user_by_email(self, email=email)
+            users = User.objects.filter(email=email)
+            if not users.exists():
+                return Response({
+                    "status": False,
+                    "message": "User does not exist",
+                    "data": None
+                }, status=HTTP_404_NOT_FOUND,)
+
+            user = users.first()
             if user.check_password(password):
                 if user.is_active:
-
                     # Delete the old auth token
                     token = Token.objects.filter(user=user).first()
                     if token:
@@ -100,33 +97,30 @@ class EmailLoginAPIView(APIView):
 
                     # Generate auth token and return it in response
                     token = Token.objects.create(user=user)
-                    content = {
-                        'status': True,
-                        'message': 'User Login successfully',
-                        'data': {'token': token.key}
-                        }
 
-                    return Response(content, status=HTTP_200_OK)
+                    return Response({
+                        "status": True,
+                        "message": "User Login successfully",
+                        "data": {"token": token.key},
+                    }, status=HTTP_200_OK)
                 else:
-                    content = {
-                        'status': False,
-                        'message': 'User account is not active',
-                        'data': None
-                        }
-                    return Response(content, status=HTTP_401_UNAUTHORIZED)
+                    return Response({
+                        "status": False,
+                        "message": "User account is not active",
+                        "data": None,
+                    }, status=HTTP_401_UNAUTHORIZED)
             else:
-                content = {
-                    'status': False,
-                    'message': 'Invalid password',
-                    'data': None
-                    }
-                return Response(content, status=HTTP_401_UNAUTHORIZED)
-        content = {
-            'status': False,
-            'message': 'Missing Required Field.',
-            'data': 'Email and password required fields'
-            }
-        return Response(content, status=HTTP_401_UNAUTHORIZED)
+                return Response({
+                    "status": False,
+                    "message": "Invalid email or password",
+                    "data": None,
+                }, status=HTTP_401_UNAUTHORIZED)
+        else:
+            return Response({
+                    "status": False,
+                    "message": "Missing email or password field",
+                    "data": None,
+                }, status=HTTP_401_UNAUTHORIZED)
 
 
 class ForgetPasswordAPIView(APIView):
@@ -143,10 +137,18 @@ class ForgetPasswordAPIView(APIView):
         If the email address is not provided or the user is inactive,
         it returns an appropriate error message.
         """
-        email = request.data.get('email')
+        email = request.data.get("email")
 
         if email:
-            user = get_user_by_email(self, email=email)
+            users = User.objects.filter(email=email)
+            if not users.exists():
+                return Response({
+                    "status": False,
+                    "message": "User does not exist",
+                    "data": None
+                }, status=HTTP_404_NOT_FOUND)
+
+            user = users.first()
             if user.is_active:
 
                 # Delete any existing forget password entry
@@ -155,14 +157,13 @@ class ForgetPasswordAPIView(APIView):
                     forget_password.delete()
 
                 # Generate random OTP
-                otp = get_random_string(length=6, allowed_chars='0123456789')
+                otp = get_random_string(length=6, allowed_chars="0123456789")
 
                 # Send email with the authtoken and OTP to the user
-                email_subject = f'OTP for the {user}'
-                email_body = render_to_string('registration_email.txt', {
-                    'user': user,
-                    'otp': otp
-                })
+                email_subject = f"OTP for the {user}"
+                email_body = render_to_string(
+                    "registration_email.txt", {"user": user, "otp": otp}
+                )
                 email = EmailMessage(
                     email_subject,
                     email_body,
@@ -174,32 +175,30 @@ class ForgetPasswordAPIView(APIView):
                 forget_password = ForgetPassword(user=user, otp=otp)
                 forget_password.save()
 
-                content = {
-                    'status': True,
-                    'message': 'OTP sent successfully',
-                    'data': None
-                }
-                return Response(content, status=HTTP_200_OK)
+                return Response({
+                    "status": True,
+                    "message": "OTP sent successfully",
+                    "data": None,
+                }, status=HTTP_200_OK)
             else:
-                content = {
-                    'status': False,
-                    'message': 'User is not active',
-                    'data': None
-                }
-                return Response(content, status=HTTP_400_BAD_REQUEST)
+                return Response({
+                    "status": False,
+                    "message": "User is not active",
+                    "data": None,
+                }, status=HTTP_400_BAD_REQUEST)
 
-        content = {
-            'status': False,
-            'message': 'Missing required fields',
-            'data': 'email is required'
-        }
-        return Response(content, status=HTTP_400_BAD_REQUEST)
+        return Response({
+            "status": False,
+            "message": "Missing required fields",
+            "data": None
+        }, status=HTTP_400_BAD_REQUEST)
 
 
 class UserVerifyOtpView(APIView):
     """
     API View for verifying user OTP during password reset.
     """
+
     def post(self, request):
         """
         Verifies the OTP provided by the user for password reset.
@@ -208,19 +207,18 @@ class UserVerifyOtpView(APIView):
         request (HttpRequest): The HTTP request object containing the OTP.
 
         Returns:
-        response (HttpResponse): A JSON response containing the status of 
+        response (HttpResponse): A JSON response containing the status of
                 OTP verification and a new auth token if verification is successful.
         """
-        otp = request.data.get('otp')
+        otp = request.data.get("otp")
 
         # Check if OTP is present in request data, if not then return an error response
         if not otp:
-            content = {
-                'status': False,
-                'message': 'Missing required fields',
-                'data': 'OTP is required'
-                }
-            return Response(content, status=HTTP_400_BAD_REQUEST)
+            return Response({
+                "status": False,
+                "message": "Missing required fields",
+                "data": None,
+            }, status=HTTP_400_BAD_REQUEST)
 
         # Fetch user by OTP
         try:
@@ -228,17 +226,16 @@ class UserVerifyOtpView(APIView):
             forget_password = ForgetPassword.objects.get(otp=otp)
         except ForgetPassword.DoesNotExist:
             # If no forget password entry with the provided OTP is found, return an error response
-            content = {
-                'status': False,
-                'message': 'OTP Verification failed',
-                'data': None
-                }
-            raise NotFound(content)
+            raise NotFound({
+                "status": False,
+                "message": "OTP Verification failed",
+                "data": None,
+            })
 
         # Get the user associated with the forget password entry
         user = forget_password.user
 
-        # Delete the old auth token, if present
+        # Delete the old auth token
         token = Token.objects.filter(user=user).first()
         if token:
             token.delete()
@@ -247,29 +244,42 @@ class UserVerifyOtpView(APIView):
         token = Token.objects.create(user=user)
 
         # Return success response with the new auth token
-        content = {
-            'status': True,
-            'message': 'OTP is Verified Successfully.',
-            'data': {'token': token.key}
-            }
-        return Response(content, status=HTTP_200_OK)
+        return Response({
+            "status": True,
+            "message": "OTP is Verified Successfully.",
+            "data": {"token": token.key},
+        }, status=HTTP_200_OK)
 
 
 class UpdatePasswordAPIView(APIView):
     """
     API View for updating user password.
     """
+
     authentication_classes = (TokenAuthentication,)
     permission_classes = (IsAuthenticated,)
 
     def post(self, request):
-        new_password = request.data.get('new_password')
+        """
+        Update the user's password and generate a new authentication token.
+
+        Parameters:
+        request (Request): The incoming request object.
+
+        Returns:
+        Response: JSON response containing the new authentication token
+            if the password is updated successfully.
+            Error response if the new password is missing or invalid.
+        """
+
+        new_password = request.data.get("new_password")
 
         if not new_password:
-            content = {'status': False,
-                       'message': 'Email and new_password required fields',
-                       'data': None}
-            return Response(content, status=HTTP_400_BAD_REQUEST)
+            return Response({
+                "status": False,
+                "message": "Email and new_password required fields",
+                "data": None,
+            }, status=HTTP_400_BAD_REQUEST)
 
         user = request.user
 
@@ -285,27 +295,42 @@ class UpdatePasswordAPIView(APIView):
         # Generate and set new auth token for the user
         new_token = Token.objects.create(user=user)
 
-        content = {'status': True,
-                   'message': 'Password updated successfully',
-                   'data': {'token': new_token.key}}
-        return Response(content, status=HTTP_200_OK)
+        return Response({
+            "status": True,
+            "message": "Password updated successfully",
+            "data": {"token": new_token.key},
+        }, status=HTTP_200_OK)
 
 
 class UpdateUsernameAPIView(APIView):
     """
     API View for updating the username of a user.
     """
+
     authentication_classes = (TokenAuthentication,)
     permission_classes = (IsAuthenticated,)
 
     def put(self, request):
-        new_username = request.data.get('new_username')
+        """
+        Update the username of the authenticated user.
+
+        Required request data:
+        {
+            "new_username": <string>
+        }
+
+        Returns:
+        - HTTP 200 OK: username updated successfully
+        - HTTP 400 BAD REQUEST: missing required fields or username already exists
+        """
+        new_username = request.data.get("new_username")
 
         if not new_username:
-            content = {'status': False,
-                       'message': 'Missing required fields',
-                       'data': 'email and new_username are required'}
-            return Response(content, status=HTTP_400_BAD_REQUEST)
+            return Response({
+                "status": False,
+                "message": "Missing required fields",
+                "data": "email and new_username are required",
+            }, status=HTTP_400_BAD_REQUEST)
 
         user = request.user
 
@@ -313,93 +338,118 @@ class UpdateUsernameAPIView(APIView):
         try:
             user.save()
         except IntegrityError:
-            content = {'status': False,
-                       'message': 'Username already exists',
-                       'data': None}
-            return Response(content, status=HTTP_400_BAD_REQUEST)
+            return Response({
+                "status": False,
+                "message": "Username already exists",
+                "data": None,
+            }, status=HTTP_400_BAD_REQUEST)
 
-        content = {'status': True,
-                   'message': 'Username updated successfully',
-                   'data': None}
-        return Response(content, status=HTTP_200_OK)
+        return Response({
+            "status": True,
+            "message": "Username updated successfully",
+            "data": None,
+        }, status=HTTP_200_OK)
 
 
 class DeleteUserAPIView(APIView):
     """
     API View for deleting a user.
+
+    Only authenticated users can delete their own account.
+
+    Returns:
+        A JSON response with the following fields:
+            - status (bool): True if the user was deleted successfully, False otherwise
+            - message (str): A message indicating the result of the operation
+            - data: None
     """
+
     def delete(self, request):
 
         user = request.user
         user.delete()
 
-        content = {'status': True,
-                   'message': 'User deleted successfully',
-                   'data': None}
-        return Response(content, status=HTTP_200_OK)
+        return Response({
+            "status": True,
+            "message": "User deleted successfully",
+            "data": None,
+        }, status=HTTP_200_OK)
 
 
 class BookViewAPI(APIView):
     """
     API View for creating a new book for the user.
+
+    Authentication: Token authentication is required.
+    Permissions: The user must be authenticated.
+
+    POST request:
+        Required fields:
+            - book_name: str
+            - book_author: str
+            - book_price: decimal
+
+        Returns:
+            - status: bool - True if the book was created successfully, False otherwise.
+            - message: str - A message indicating whether the operation was successful.
+            - data: dict - A dictionary containing the following fields:
+                - id: int - The ID of the created book.
+                - name: str - The name of the created book.
+                - author: str - The author of the created book.
+                - price: decimal - The price of the created book.
     """
+
     authentication_classes = (TokenAuthentication,)
     permission_classes = (IsAuthenticated,)
 
     def post(self, request):
-        book_name = request.data.get('book_name')
-        book_author = request.data.get('book_author')
-        book_price = request.data.get('book_price')
+        book_name = request.data.get("book_name")
+        book_author = request.data.get("book_author")
+        book_price = request.data.get("book_price")
 
         if not (book_name and book_author and book_price):
-            content = {
-                'status': False,
-                'message': 'Missing required fields',
-                'data': 'book_name, book_author, and book_price are required'
-                }
-            return Response(content, status=HTTP_400_BAD_REQUEST)
+            return Response({
+                "status": False,
+                "message": "Missing required fields",
+                "data": None,
+            }, status=HTTP_400_BAD_REQUEST)
 
         user = request.user
 
         book = Book.objects.create(
-            user=user,
-            name=book_name,
-            author=book_author,
-            price=book_price
-            )
+            user=user, name=book_name, author=book_author, price=book_price
+        )
 
-        content = {'status': True,
-                   'message': 'Book created successfully',
-                   'data': {
-                       'id': book.id,
-                       'name': book.name,
-                       'author': book.author,
-                       'price': book.price
-                   }}
-        return Response(content, status=HTTP_201_CREATED)
+        return Response({
+            "status": True,
+            "message": "Book created successfully",
+            "data": {
+                "id": book.id,
+                "name": book.name,
+                "author": book.author,
+                "price": book.price,
+            },
+        }, status=HTTP_201_CREATED)
 
 
 class DashboardAPIView(APIView):
     """
     API for showing the user books.
     """
+
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        """
+        GET request to retrieve all books created by the user.
+        Returns a JSON response with the book data.
+        """
         user = request.user
-        print(user)
-        books = Book.objects.filter(user=user)
+        books = Book.objects.filter(user=user).values("name", "author", "price")
 
-        book_data = []
-        for book in books:
-            book_data.append({
-                'name': book.name,
-                'author': book.author,
-                'price': book.price,
-            })
-
-        content = {'status': True,
-                   'message': 'All books retrieved successfully',
-                   'data': book_data}
-        return Response(content, status=HTTP_200_OK)
+        return Response({
+            "status": True,
+            "message": "All books retrieved successfully",
+            "data": books,
+        }, status=HTTP_200_OK)
