@@ -1,0 +1,15 @@
+Hi {{ user.first_name }} {{ user.last_name }},
+
+Your account details are:
+
+Username: {{ user.username }}
+Email: {{ user.email }}
+
+To complete your forgetPassword Process, please enter the following OTP on the otpverify page:
+
+{{ otp }}
+
+If you did not request for this, please contact us immediately.
+
+Best regards,
+Bhargav Borkhatariya - Ajax
